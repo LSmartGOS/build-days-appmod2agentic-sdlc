@@ -56,7 +56,7 @@ must enforce the rules itself.
 | ID | Requirement | Evidence or rationale |
 | --- | --- | --- |
 | FR-1 | The service shall reject, with an `IOException`, any key or upload filename that is null, empty, or blank. | `LocalFileStorageService.uploadObject`, `getObject`, `deleteObject` in `legacy-src/java-asset-manager/web/src/main/java/com/microsoft/migration/assets/service/LocalFileStorageService.java` |
-| FR-2 | The service shall reject any key or upload filename containing `..`, `/`, `\`, or the encoded sequences `%2f` or `%5c` (case-insensitive). | Owner decision: "disallow '..' and encode slashes". Keys are flat names: `listObjects` uses `Files.walk(rootLocation, 1)` and `list.html` builds `/storage/view/{key}`. |
+| FR-2 | The service shall reject any key or upload filename containing `..`, `/`, or `\`. It shall treat all other characters, including `%`, as ordinary filename characters and shall not URL-encode or decode keys. | Owner decision: disallow `..`; the owner clarified that percent-encoded sequences need not be rejected. Keys are flat names: `listObjects` uses `Files.walk(rootLocation, 1)`. Spring decodes `{key}` once before the service sees it, so the service always works on decoded names (see URL encoding finding). |
 | FR-3 | The service shall reject any key or filename that is an absolute path or drive-qualified path, or whose resolved, normalized path is not a direct child of `rootLocation`. | `rootLocation.resolve(key)` returns the argument when it is absolute. |
 | FR-4 | A rejected upload shall not write a file and shall not call `RabbitTemplate.convertAndSend`. | `LocalFileStorageService.uploadObject` sends the queue message after copying. |
 | FR-5 | A rejected key in `deleteObject` shall not delete the original file or any thumbnail. | `LocalFileStorageService.deleteObject` |
@@ -82,7 +82,8 @@ must enforce the rules itself.
 - Any change to the worker module, including `LocalFileProcessingService` (owner decision: keep the change small and the modules separate).
 - Any change to `AwsS3Service`, `S3Controller`, templates, `application.properties`, or any `pom.xml`.
 - A controller or MockMvc test (owner decision).
-- Symlink resolution (`toRealPath`), Windows alternate-data-stream or reserved-name handling, and case-insensitive file-system handling, unless the owner adds them (see Unresolved questions).
+- Symlink resolution (`toRealPath`) and Windows-specific hardening (alternate data streams such as `file.txt:stream`, reserved names such as `CON`, trailing dots or spaces, case-insensitive file systems). Owner decision: out of scope.
+- URL-encoding of keys in templates (`list.html`, `view.html`) and in `StorageService.generateUrl`. These are outside the allowed paths; see the URL encoding finding and Unresolved questions.
 - Subdirectory support, Java or framework upgrades, refactoring, and cleanup.
 
 ## Edge cases
@@ -90,9 +91,10 @@ must enforce the rules itself.
 | Type | Condition | Expected behavior |
 | --- | --- | --- |
 | Normal | Upload, read, and delete of `photo.png` in a temp storage directory. | Works as before. Delete also removes `photo_thumbnail.png` when present. |
-| Failure | Key or filename is `..`, `a/b`, `a\b`, `%2F`, `%5c`, `/tmp/x`, `C:/x`, null, or blank. | `IOException` with a safe message. No file operation and no queue message. |
+| Failure | Key or filename is `..`, `a/b`, `a\b`, `/tmp/x`, `C:/x`, null, or blank. | `IOException` with a safe message. No file operation and no queue message. |
 | Failure | Safe key does not exist. | Existing `FileNotFoundException` behavior. |
 | Boundary | `a..b.png`, `...`, `.hidden`, a name with spaces. | Any name containing `..` is rejected (including `a..b.png` and `...`). `.hidden` and names with spaces are accepted. |
+| Boundary | Name contains a literal `%` sequence such as `100%2Fine.png` (already decoded by Spring). | Accepted and stored literally; no decoding or rejection in the service. Links to it are a template concern (see URL encoding finding). |
 | Boundary | Key names a directory inside the root. | Behavior not changed by this work (unverified; see Unresolved questions). |
 | Compatibility | Upload filename such as `dir/x.png`, accepted today if `dir` exists. | Now rejected. This is a deliberate behavior change. |
 | Compatibility | Existing files with legal names. | Still list, view, and delete as before. |
@@ -109,7 +111,7 @@ must enforce the rules itself.
 ### AC-2: Unsafe read keys
 
 - **Given** the same service and an existing file in the root
-- **When** `getObject` is called with each of `..`, `a/b`, `a\b`, `%2F`, `%5c`, `a..b.png`, null, and blank
+- **When** `getObject` is called with each of `..`, `a/b`, `a\b`, `a..b.png`, null, and blank
 - **Then** an `IOException` is thrown whose message is non-empty and does not contain the submitted key or the root path
 - **Verification:** `LocalFileStorageServiceTest`
 
@@ -137,8 +139,15 @@ must enforce the rules itself.
 ### AC-6: Unsafe upload filenames with separators or `..`
 
 - **Given** the same service
-- **When** `uploadObject` is called with filenames `../x.png`, `dir/x.png`, `dir\x.png`, and `a%2Fb.png`
+- **When** `uploadObject` is called with filenames `../x.png`, `dir/x.png`, and `dir\x.png`
 - **Then** an `IOException` is thrown, no file is written, and `RabbitTemplate` is never called
+- **Verification:** `LocalFileStorageServiceTest`
+
+### AC-9: Literal percent sequences are ordinary characters
+
+- **Given** the same service
+- **When** `uploadObject` is called with a file named `100%2Fine.png`, then `getObject("100%2Fine.png")` and `deleteObject("100%2Fine.png")` are called
+- **Then** the file is stored under that exact literal name, read back with the same content, and deleted, with no `IOException` and no decoding
 - **Verification:** `LocalFileStorageServiceTest`
 
 ### AC-7: Valid delete with thumbnail
@@ -171,8 +180,8 @@ must enforce the rules itself.
 | Spring path variables and Tomcat already block `/` and encoded slashes for view and delete. | Assumption (unverified) | Not relied on. The service enforces FR-2 itself. |
 | `StringUtils.cleanPath(null)` returns null in the Spring version managed by Boot 2.7, so the NPE comes from `filename.contains("..")`. | Assumption (unverified) | Confirm the Spring version in the dependency tree before finalizing AC-5. |
 | The web module has no tests today, so JUnit 5 and Surefire discovery are unverified. | Risk | Confirm with the baseline run. Stop if `pom.xml` changes are required. |
-| `%2f` and `%5c` are legal filename characters after Spring decodes path variables, so rejecting them changes behavior for names such as `100%2Fine.png`. | Risk | Requirement comes from the owner. The behavior change is recorded here. |
-| Rejecting `\` also changes behavior on Linux, where it is a legal filename character. | Risk | Accepted by this specification. |
+| Rejecting `\` changes behavior on Linux, where it is a legal filename character. | Risk | Accepted by this specification. |
+| Links built by the templates do not URL-encode keys, so files with characters such as `#`, `?`, `%`, `+`, or `\` may produce broken view or delete links (the service itself is unaffected). | Risk (unverified at runtime) | Out of scope for this change. Recorded as a follow-up; see Unresolved questions. |
 | A dev instance may be reachable from other machines. | Assumption (unverified) | Bind address and `dev` profile activation were not inspected. |
 | `target/` is ignored by git. | Assumption (unverified) | Check with `git status` after the baseline run. |
 | Worker `LocalFileProcessingService` trusts message keys without a containment check. | Risk (accepted) | Out of scope by owner decision. Track as a follow-up. |
@@ -188,20 +197,24 @@ must enforce the rules itself.
   - `S3Controller.deleteObject` and `uploadObject` — flash messages `"Failed to delete file: " + e.getMessage()` and `"Failed to upload file: " + e.getMessage()`.
   - `legacy-src/java-asset-manager/web/src/main/java/com/microsoft/migration/assets/service/StorageService.java:getThumbnailKey` — appends `_thumbnail` to the filename.
   - `legacy-src/java-asset-manager/worker/src/main/java/com/microsoft/migration/assets/worker/service/LocalFileProcessingService.java:downloadOriginal` and `uploadThumbnail` — unguarded `rootLocation.resolve(key)` (out of scope).
+- **URL encoding finding:**
+  - Service: no encoding is required or wanted. Spring decodes the `{key}` path variable once before `S3Controller` passes it to the service, and the service uses it as a raw file name. Encoding or decoding there would double-process names such as `100%2Fine.png`. `/` and `\` cannot be valid keys, so they are rejected (FR-2) rather than encoded.
+  - Templates: `legacy-src/java-asset-manager/web/src/main/resources/templates/list.html` lines 10, 20, 21 and `view.html` lines 21, 24, 33 build links as `@{'/storage/view/' + ${object.key}}` (and the `view-page` and `delete` equivalents). This concatenates the raw key into the URL. As I understand Thymeleaf link expressions, only `{name}` placeholders with parameters are encoded, not concatenated strings, so keys containing `#`, `?`, `%`, `+`, spaces, or `\` are likely to produce wrong links. Unverified at runtime.
+  - Recommended encoding for a follow-up: use Thymeleaf path-variable syntax such as `@{/storage/view/{key}(key=${object.key})}`, which percent-encodes the segment (for example `%` becomes `%25`, `#` becomes `%23`, `?` becomes `%3F`, `\` becomes `%5C`; a space is encoded as `%20`). Note that Tomcat rejects `%5C` and `%2F` by default, so such names would still not be reachable via the browser, which is another reason for rejecting `/` and `\` in the service.
+  - `StorageService.generateUrl` returns `"/storage/view/" + key` unencoded. Its value is stored in `S3StorageItem.url`; the templates do not use that property (`grep` found no template reference), so the practical impact is unconfirmed.
+  - `upload.html:125` stores the raw `file.name` in `sessionStorage` and `list.html` compares it with `data-key` attributes. This is plain string comparison, not URL building.
 - **Existing tests:** `legacy-src/java-asset-manager/worker/src/test/java/com/microsoft/migration/assets/worker/service/S3FileProcessingServiceTest.java`. No tests exist in the `web` module.
 - **Baseline validation evidence:** not yet run. The expected full-reactor result is documented in `legacy-src/java-asset-manager/AGENTS.md`: `.\mvnw.cmd -B -ntp test` fails only on the known worker error (final `software.amazon.awssdk.core.ResponseInputStream` cannot be mocked) with the other three worker tests passing. Record the observed result for both that command and the primary command before editing.
 
 ### Unresolved questions
 
-- [ ] Is a Windows-specific hardening needed in this change (a colon or alternate data stream such as `file.txt:stream`, reserved names such as `CON`, trailing dots or spaces)? Default: out of scope. Owner: @LSmartGOS. Decide before implementation.
-- [ ] Does the owner want symlinks that point outside the root handled? Default: out of scope. Owner: @LSmartGOS. Decide before implementation.
-- [ ] Is the `%2f` and `%5c` rejection meant for decoded key text (as written) or only for container-level behavior? Default: as written. Owner: @LSmartGOS.
+- Resolved by the owner: Windows-specific hardening and symlink handling are out of scope; `%2f` and `%5c` are not rejected by the service; template link encoding is a separate follow-up change, not part of this specification.
 - [ ] Which Spring version does Boot 2.7 resolve, and does `cleanPath(null)` return null? Owner: implementer, answered during the baseline check.
 - [ ] Is the `dev` profile reachable beyond localhost (bind address, activation)? Owner: implementer. Affects the problem statement only.
 - [ ] How should a key that names a directory in the root behave? Default: unchanged. Owner: @LSmartGOS.
 - [ ] Does `-pl web` run correctly without `-am`? Owner: implementer, answered by the baseline run.
 
-The specification is not ready for approval while the first three questions can change scope or acceptance criteria.
+The specification is not ready for approval until the remaining open questions are answered, because they could change the acceptance criteria or validation.
 
 ### Boundary and validation review
 
