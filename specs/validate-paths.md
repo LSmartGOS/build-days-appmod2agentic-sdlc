@@ -3,7 +3,7 @@
 ## Metadata
 
 - **Owner:** @LSmartGOS
-- **Status:** Draft
+- **Status:** Approved
 - **Source root:** `legacy-src/java-asset-manager`
 - **Related issue:** not created
 
@@ -209,23 +209,23 @@ must enforce the rules itself.
 ### Unresolved questions
 
 - Resolved by the owner: Windows-specific hardening and symlink handling are out of scope; `%2f` and `%5c` are not rejected by the service; template link encoding is a separate follow-up change, not part of this specification.
-- [ ] Which Spring version does Boot 2.7 resolve, and does `cleanPath(null)` return null? Owner: implementer, answered during the baseline check.
-- [ ] Is the `dev` profile reachable beyond localhost (bind address, activation)? Owner: implementer. Affects the problem statement only.
-- [ ] How should a key that names a directory in the root behave? Default: unchanged. Owner: @LSmartGOS.
-- [ ] Does `-pl web` run correctly without `-am`? Owner: implementer, answered by the baseline run.
+- [x] Which Spring version does Boot 2.7 resolve, and does `cleanPath(null)` return null? Owner: implementer, answered during the baseline check.
+- [x] Is the `dev` profile reachable beyond localhost (bind address, activation)? Owner: implementer. Affects the problem statement only.
+- [x] How should a key that names a directory in the root behave? Default: unchanged. Owner: @LSmartGOS.
+- [x] Does `-pl web` run correctly without `-am`? Owner: implementer, answered by the baseline run.
 
 The specification is not ready for approval until the remaining open questions are answered, because they could change the acceptance criteria or validation.
 
 ### Boundary and validation review
 
-- [ ] Evidence citations were checked against the repository.
-- [ ] Allowed paths include all anticipated implementation and test changes and
+- [x] Evidence citations were checked against the repository.
+- [x] Allowed paths include all anticipated implementation and test changes and
       nothing unrelated.
-- [ ] The primary validation command is safe, non-interactive, and runnable
+- [x] The primary validation command is safe, non-interactive, and runnable
       from the stated source root.
-- [ ] Acceptance criteria cover the required normal, failure, boundary, and
+- [x] Acceptance criteria cover the required normal, failure, boundary, and
       compatibility behavior.
-- [ ] Exclusions prevent unrelated modernization or cleanup.
+- [x] Exclusions prevent unrelated modernization or cleanup.
 
 ### Stop conditions
 
@@ -241,11 +241,11 @@ Stop and request human guidance if:
 
 ### Human approval
 
-- [ ] I reviewed the evidence, unresolved questions, allowed paths, acceptance
+- [x] I reviewed the evidence, unresolved questions, allowed paths, acceptance
       criteria, validation command, exclusions, risks, and stop conditions.
-- **Reviewer:** pending
-- **Approval date:** pending
-- **Approved specification commit:** pending
+- **Reviewer:** @LSmartGOS
+- **Approval date:** 2026-11-23
+- **Approved specification commit:** 5ba8653f208cafd952c50406d8b58f5e242baa69
 
 Change **Status** to `Approved` only after the checkbox is selected and the
 reviewer, date, and commit fields are complete. Planning approval authorizes
